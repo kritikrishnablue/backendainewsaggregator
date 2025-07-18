@@ -3,7 +3,7 @@ from datetime import datetime
 from app.database.mongo import news_collection
 from app.services.summarizer import summarize_text
 
-# 🌍 List of global RSS feeds and their source names
+# 🌍 List of global + Australian RSS feeds and their channel names
 FEEDS = [
     ("https://feeds.bbci.co.uk/news/world/rss.xml", "BBC World"),
     ("https://rss.cnn.com/rss/edition_world.rss", "CNN World"),
@@ -16,20 +16,18 @@ FEEDS = [
     ("https://feeds.skynews.com/feeds/rss/world.xml", "Sky News"),
     ("https://www.dw.com/en/top-stories/s-9097/rss", "Deutsche Welle"),
     ("https://timesofindia.indiatimes.com/rssfeeds/296589292.cms", "Times of India"),
+
+    # 🇦🇺 Australian feeds
     ("https://www.abc.net.au/news/feed/51120/rss.xml", "ABC News Australia"),
-("https://www.theguardian.com/au/rss", "The Guardian Australia"),
-("https://www.sbs.com.au/news/feed", "SBS News"),
-("https://www.smh.com.au/rss/feed.xml", "Sydney Morning Herald"),
+    ("https://www.theguardian.com/au/rss", "The Guardian Australia"),
+    ("https://www.sbs.com.au/news/feed", "SBS News"),
+    ("https://www.smh.com.au/rss/feed.xml", "Sydney Morning Herald"),
+    ("https://www.theage.com.au/rss/world.xml", "The Age"),
+    ("https://www.theaustralian.com.au/rss/world.xml", "The Australian"),
+    ("https://www.theconversation.com/au/rss/world", "The Conversation"),
 ]
 
-def safe_to_str(val):
-    if isinstance(val, list):
-        return " ".join(str(v) for v in val)
-    if val is None:
-        return ""
-    return str(val)
-
-def fetch_rss_articles():
+def fetch_rss_articles(user_country: str | None = None):
     total_saved = 0
 
     for rss_url, channel_name in FEEDS:
@@ -42,16 +40,36 @@ def fetch_rss_articles():
             if not url or news_collection.find_one({"url": url}):
                 continue
 
-            title = safe_to_str(entry.get("title", "")).strip()
-            summary_text = safe_to_str(entry.get("summary", "")) or safe_to_str(entry.get("description", "")) or title
-            published_at = safe_to_str(entry.get("published", datetime.utcnow().isoformat()))
+            # 🧹 Clean title
+            title = entry.get("title", "")
+            if isinstance(title, list):
+                title = " ".join(str(t) for t in title)
+            if not title:
+                title = "No Title"
+            title = title.strip()
 
+            # ✂️ Extract summary text
+            summary_text = entry.get("summary", "")
+            if isinstance(summary_text, list):
+                summary_text = " ".join(str(s) for s in summary_text)
+            if not summary_text:
+                summary_text = entry.get("description", "")
+                if isinstance(summary_text, list):
+                    summary_text = " ".join(str(s) for s in summary_text)
+            if not summary_text:
+                summary_text = title
+
+            # 🧠 Summarize
             try:
                 ai_summary = summarize_text(summary_text)
             except Exception as e:
                 print(f"⚠️ Error summarizing article: {title[:50]}... | Error: {e}")
-                ai_summary = safe_to_str(summary_text)[:150] + "..."  # fallback
+                ai_summary = summary_text[:150] + "..."  # fallback
 
+            # 🕒 Published date
+            published_at = entry.get("published", datetime.utcnow().isoformat())
+
+            # 📦 Construct the article document
             article = {
                 "title": title,
                 "url": url,
@@ -63,6 +81,10 @@ def fetch_rss_articles():
                 "saved_at": datetime.utcnow(),
             }
 
+            if user_country:
+                article["userCountry"] = user_country.upper()
+
+            # 💾 Insert into MongoDB
             try:
                 news_collection.insert_one(article)
                 print(f"✅ Saved: {title}")
